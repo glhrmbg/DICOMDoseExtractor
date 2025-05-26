@@ -243,3 +243,4 @@ fabric.properties
 /ct_dose_report.xlsx
 /dicom_reports/
 .DS_Store
+/dicom_reports_json/

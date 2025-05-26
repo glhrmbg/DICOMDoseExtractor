@@ -641,7 +641,7 @@ class DICOMDoseExtractor:
             return None
 
 
-def process_dicom_folder(folder_path: str = "ct_dicoms", json_folder: str = "ct_reports_json",
+def process_dicom_folder(folder_path: str = "dicom_reports", json_folder: str = "dicom_reports_json",
                          debug_mode: bool = False) -> List[Dict]:
     """Processa todos os arquivos DICOM em uma pasta"""
 
@@ -707,7 +707,7 @@ def process_dicom_folder(folder_path: str = "ct_dicoms", json_folder: str = "ct_
     return reports
 
 
-def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "ct_reports_json"):
+def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "dicom_reports_json"):
     """Salva os relatórios em um arquivo JSON"""
     # Cria a pasta JSON se não existir
     if not os.path.exists(json_folder):
@@ -734,10 +734,10 @@ def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "ct_r
 def main():
     """Função principal"""
     parser = argparse.ArgumentParser(description='DICOMDoseExtractor - Extrai dados de dose de arquivos DICOM SR')
-    parser.add_argument('--folder', '-f', default='ct_dicoms',
-                        help='Pasta contendo os arquivos DICOM (padrão: ct_dicoms)')
-    parser.add_argument('--output-folder', '-o', default='ct_reports_json',
-                        help='Pasta para salvar os JSONs (padrão: ct_reports_json)')
+    parser.add_argument('--folder', '-f', default='dicom_reports',
+                        help='Pasta contendo os arquivos DICOM (padrão: dicom_reports)')
+    parser.add_argument('--output-folder', '-o', default='dicom_reports_json',
+                        help='Pasta para salvar os JSONs (padrão: dicom_reports_json)')
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Ativa o modo debug com informações detalhadas')
     parser.add_argument('--single', '-s', type=str,
