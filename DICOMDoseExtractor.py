@@ -2,13 +2,12 @@
 DICOMDoseExtractor.py - Extrator direto de dados de dose de CT de arquivos DICOM SR
 
 Este script lê arquivos DICOM de Structured Report (SR) de dose de radiação
-e extrai as informações essenciais diretamente, gerando JSON compatível com
-o CTDoseExcel.py existente.
+navegando recursivamente por estruturas de pastas aninhadas e extrai as
+informações essenciais diretamente, gerando JSON consolidado.
 """
 
 import pydicom
 import os
-import glob
 import json
 import argparse
 from datetime import datetime
@@ -97,6 +96,7 @@ class CTScanReport:
     """Relatório completo de dose CT"""
     hospital: str = ""
     report_date: str = ""
+    file_path: str = ""
     essential: EssentialInfo = None
     device: DeviceInfo = None
     irradiation: IrradiationInfo = None
@@ -166,6 +166,69 @@ class DICOMDoseExtractor:
             'ssde': '113930',
             'ctdivol_alert_value': '113904'
         }
+
+    def find_dicom_files_recursive(self, root_path: str, debug_mode: bool = False) -> List[str]:
+        """
+        Busca recursivamente por arquivos DICOM em todas as subpastas
+        """
+        dicom_files = []
+
+        if debug_mode:
+            print(f"\n🔍 Iniciando busca recursiva em: {root_path}")
+
+        try:
+            for root, dirs, files in os.walk(root_path):
+                # Ignora a pasta atual se for onde está o script
+                if root == root_path:
+                    continue
+
+                for file in files:
+                    file_path = os.path.join(root, file)
+
+                    # Verifica se é um arquivo DICOM válido
+                    if self.is_dicom_file(file_path, debug_mode):
+                        dicom_files.append(file_path)
+                        if debug_mode:
+                            print(f"  ✓ DICOM encontrado: {file_path}")
+
+        except Exception as e:
+            if debug_mode:
+                print(f"❌ Erro durante busca recursiva: {str(e)}")
+
+        if debug_mode:
+            print(f"📊 Total de arquivos DICOM encontrados: {len(dicom_files)}")
+
+        return dicom_files
+
+    def is_dicom_file(self, file_path: str, debug_mode: bool = False) -> bool:
+        """
+        Verifica se um arquivo é um DICOM válido sem fazer leitura completa
+        """
+        try:
+            # Verifica se o arquivo existe e não é muito pequeno
+            if not os.path.isfile(file_path) or os.path.getsize(file_path) < 132:
+                return False
+
+            # Tenta ler apenas o header do DICOM
+            with open(file_path, 'rb') as f:
+                # Pula os primeiros 128 bytes (preamble)
+                f.seek(128)
+                # Verifica se tem o prefixo DICM
+                dicm_prefix = f.read(4)
+                if dicm_prefix != b'DICM':
+                    return False
+
+            # Se passou na verificação básica, tenta ler com pydicom
+            ds = pydicom.dcmread(file_path, stop_before_pixels=True, force=True)
+
+            # Verifica se é um Structured Report
+            return (hasattr(ds, 'Modality') and ds.Modality == 'SR' and
+                    hasattr(ds, 'ContentSequence'))
+
+        except Exception as e:
+            if debug_mode and "not a valid DICOM file" not in str(e):
+                print(f"    ⚠️ Erro ao verificar {file_path}: {str(e)}")
+            return False
 
     def format_datetime(self, dt_str: str) -> str:
         """Converte DICOM datetime para formato legível"""
@@ -573,7 +636,7 @@ class DICOMDoseExtractor:
 
         if debug_mode:
             print(f"\n{'=' * 80}")
-            print(f"PROCESSANDO DICOM: {os.path.basename(dicom_path)}")
+            print(f"PROCESSANDO DICOM: {dicom_path}")
             print(f"{'=' * 80}")
 
         try:
@@ -592,6 +655,9 @@ class DICOMDoseExtractor:
                 return None
 
             report = CTScanReport()
+
+            # Adiciona o caminho do arquivo
+            report.file_path = dicom_path
 
             # Extrai informações básicas
             report.essential = self.extract_patient_info(ds)
@@ -641,115 +707,175 @@ class DICOMDoseExtractor:
             return None
 
 
-def process_dicom_folder(folder_path: str = "dicom_reports", json_folder: str = "dicom_reports_json",
-                         debug_mode: bool = False) -> List[Dict]:
-    """Processa todos os arquivos DICOM em uma pasta"""
-
-    # Cria a pasta se não existir
-    if not os.path.exists(folder_path):
-        try:
-            os.makedirs(folder_path)
-            print(f"✓ Pasta '{folder_path}' criada com sucesso!")
-        except Exception as e:
-            print(f"✗ Erro ao criar pasta '{folder_path}': {str(e)}")
-            return []
-
-    # Busca arquivos DICOM (sem extensão ou .dcm)
-    dicom_files = []
-
-    # Arquivos sem extensão
-    for file in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, file)
-        if os.path.isfile(file_path) and '.' not in file:
-            dicom_files.append(file_path)
-
-    # Arquivos .dcm
-    dicom_pattern = os.path.join(folder_path, "*.dcm")
-    dicom_files.extend(glob.glob(dicom_pattern))
-
-    if not dicom_files:
-        print(f"ℹ️ Nenhum arquivo DICOM encontrado na pasta '{folder_path}'.")
-        return []
-
-    print(f"🔍 Encontrados {len(dicom_files)} arquivos DICOM para processar.")
+def process_all_dicoms_recursive(root_path: str = ".", output_file: str = None, debug_mode: bool = False) -> List[Dict]:
+    """
+    Processa todos os arquivos DICOM encontrados recursivamente em uma estrutura de pastas
+    """
 
     extractor = DICOMDoseExtractor()
-    reports = []
 
-    for dicom_file in dicom_files:
+    print(f"🔍 Iniciando busca recursiva de arquivos DICOM em: {os.path.abspath(root_path)}")
+
+    # Busca todos os arquivos DICOM recursivamente
+    dicom_files = extractor.find_dicom_files_recursive(root_path, debug_mode)
+
+    if not dicom_files:
+        print("❌ Nenhum arquivo DICOM SR encontrado na estrutura de pastas.")
+        return []
+
+    print(f"📊 Total de arquivos DICOM encontrados: {len(dicom_files)}")
+    print(f"{'=' * 80}")
+
+    reports = []
+    processed_count = 0
+    error_count = 0
+
+    for i, dicom_file in enumerate(dicom_files, 1):
         try:
-            if debug_mode:
-                print(f"\n{'=' * 80}")
-                print(f"PROCESSANDO: {os.path.basename(dicom_file)}")
-                print(f"{'=' * 80}")
+            print(f"📄 Processando {i}/{len(dicom_files)}: {os.path.relpath(dicom_file, root_path)}")
 
             report = extractor.extract_from_dicom(dicom_file, debug_mode=debug_mode)
 
             if report:
                 report_dict = asdict(report)
                 reports.append(report_dict)
+                processed_count += 1
 
-                # Salva o relatório individual usando o Patient ID
-                patient_id = report.essential.patient_id
-                if patient_id:
-                    output_file = f"ct_report_dicom_{patient_id}.json"
-                    save_to_json([report_dict], output_file, json_folder)
-                    print(
-                        f"✓ Processado e salvo: {os.path.basename(dicom_file)} → {os.path.join(json_folder, output_file)}")
-                else:
-                    print(f"✓ Processado: {os.path.basename(dicom_file)} (sem Patient ID)")
+                if not debug_mode:
+                    print(f"  ✓ Sucesso - Patient ID: {report.essential.patient_id}, DLP: {report.irradiation.total_dlp}")
             else:
-                print(f"⚠️ Não foi possível extrair dados de: {os.path.basename(dicom_file)}")
+                error_count += 1
+                print(f"  ❌ Falha ao extrair dados")
 
         except Exception as e:
-            print(f"✗ Erro ao processar {os.path.basename(dicom_file)}: {str(e)}")
+            error_count += 1
+            print(f"  ❌ Erro: {str(e)}")
+
+    # Relatório final
+    print(f"\n{'=' * 80}")
+    print(f"📊 RESUMO DO PROCESSAMENTO")
+    print(f"{'=' * 80}")
+    print(f"Total de arquivos encontrados: {len(dicom_files)}")
+    print(f"Processados com sucesso: {processed_count}")
+    print(f"Erros: {error_count}")
+
+    if reports:
+        # Gera estatísticas básicas
+        total_dlp_values = []
+        hospitals = set()
+        patients = set()
+
+        for report in reports:
+            # DLP values
+            if report.get('irradiation', {}).get('total_dlp'):
+                dlp_str = report['irradiation']['total_dlp']
+                try:
+                    dlp_value = float(dlp_str.split()[0])
+                    total_dlp_values.append(dlp_value)
+                except:
+                    pass
+
+            # Hospitals
+            hospital = report.get('hospital', '')
+            if hospital:
+                hospitals.add(hospital)
+
+            # Patients
+            patient_id = report.get('essential', {}).get('patient_id', '')
+            if patient_id:
+                patients.add(patient_id)
+
+        print(f"Pacientes únicos: {len(patients)}")
+
+        if hospitals:
+            print(f"Hospitais: {', '.join(list(hospitals)[:3])}{'...' if len(hospitals) > 3 else ''}")
+
+        if total_dlp_values:
+            print(f"DLP Total - Min: {min(total_dlp_values):.2f}, Max: {max(total_dlp_values):.2f}, Média: {sum(total_dlp_values) / len(total_dlp_values):.2f}")
+
+        # Salva o arquivo JSON consolidado
+        if output_file is None:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_file = f"dicom_reports_consolidated_{timestamp}.json"
+
+        if save_consolidated_json(reports, output_file):
+            print(f"✅ Relatório consolidado salvo em: {output_file}")
+        else:
+            print(f"❌ Erro ao salvar relatório consolidado")
 
     return reports
 
 
-def save_to_json(reports: List[Dict], output_file: str, json_folder: str = "dicom_reports_json"):
-    """Salva os relatórios em um arquivo JSON"""
-    # Cria a pasta JSON se não existir
-    if not os.path.exists(json_folder):
-        try:
-            os.makedirs(json_folder)
-            print(f"✓ Pasta '{json_folder}' criada com sucesso!")
-        except Exception as e:
-            print(f"✗ Erro ao criar pasta '{json_folder}': {str(e)}")
-            return False
-
+def save_consolidated_json(reports: List[Dict], output_file: str) -> bool:
+    """
+    Salva todos os relatórios em um único arquivo JSON consolidado
+    """
     try:
-        output_path = os.path.join(json_folder, output_file)
+        # Adiciona metadados ao arquivo
+        consolidated_data = {
+            "metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "total_reports": len(reports),
+                "extractor_version": "2.0_recursive",
+                "description": "Consolidated CT dose reports extracted from DICOM SR files"
+            },
+            "reports": reports
+        }
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(reports, f, indent=2, ensure_ascii=False)
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(consolidated_data, f, indent=2, ensure_ascii=False)
 
         return True
 
     except Exception as e:
-        print(f"✗ Erro ao salvar JSON {output_file}: {str(e)}")
+        print(f"❌ Erro ao salvar JSON consolidado: {str(e)}")
         return False
 
 
 def main():
     """Função principal"""
-    parser = argparse.ArgumentParser(description='DICOMDoseExtractor - Extrai dados de dose de arquivos DICOM SR')
-    parser.add_argument('--folder', '-f', default='dicom_reports',
-                        help='Pasta contendo os arquivos DICOM (padrão: dicom_reports)')
-    parser.add_argument('--output-folder', '-o', default='dicom_reports_json',
-                        help='Pasta para salvar os JSONs (padrão: dicom_reports_json)')
+    parser = argparse.ArgumentParser(
+        description='DICOMDoseExtractor - Busca recursiva e extração de dados de dose de arquivos DICOM SR',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos de uso:
+
+1. Processar pasta atual (busca recursiva):
+   python DICOMDoseExtractor.py
+
+2. Processar pasta específica:
+   python DICOMDoseExtractor.py --folder /caminho/para/pasta/com/subpastas
+
+3. Com modo debug ativado:
+   python DICOMDoseExtractor.py --debug
+
+4. Especificar nome do arquivo de saída:
+   python DICOMDoseExtractor.py --output relatorio_dose_2024.json
+
+5. Processar um único arquivo:
+   python DICOMDoseExtractor.py --single /caminho/para/arquivo/dicom
+
+O script irá navegar recursivamente por todas as subpastas procurando
+arquivos DICOM SR de dose e consolidar todos os dados em um único JSON.
+        """
+    )
+
+    parser.add_argument('--folder', '-f', default='.',
+                        help='Pasta raiz para busca recursiva (padrão: pasta atual)')
+    parser.add_argument('--output', '-o', type=str,
+                        help='Nome do arquivo JSON de saída (padrão: dicom_reports_consolidated_TIMESTAMP.json)')
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Ativa o modo debug com informações detalhadas')
     parser.add_argument('--single', '-s', type=str,
-                        help='Processa um único arquivo DICOM')
+                        help='Processa um único arquivo DICOM específico')
 
     args = parser.parse_args()
 
     print("=" * 80)
-    print("🏥 DICOM DOSE EXTRACTOR - Extrator Direto de Arquivos DICOM")
+    print("🏥 DICOM DOSE EXTRACTOR - Versão Recursiva v2.0")
     print("=" * 80)
-    print(f"📂 Pasta de entrada: {args.folder}")
-    print(f"📁 Pasta de saída: {args.output_folder}")
+    print(f"📂 Pasta raiz: {os.path.abspath(args.folder)}")
+    print(f"📁 Arquivo de saída: {args.output or 'dicom_reports_consolidated_TIMESTAMP.json'}")
     print(f"🔍 Modo debug: {'Ativado' if args.debug else 'Desativado'}")
     print("=" * 80)
 
@@ -760,63 +886,36 @@ def main():
             return
 
         extractor = DICOMDoseExtractor()
-        print(f"🔍 Processando arquivo único: {os.path.basename(args.single)}")
+        print(f"🔍 Processando arquivo único: {args.single}")
 
         report = extractor.extract_from_dicom(args.single, debug_mode=args.debug)
 
         if report:
             report_dict = asdict(report)
-            patient_id = report.essential.patient_id or "unknown"
-            output_file = f"ct_report_dicom_{patient_id}.json"
 
-            if save_to_json([report_dict], output_file, args.output_folder):
-                print(f"✅ Relatório salvo em: {os.path.join(args.output_folder, output_file)}")
+            output_file = args.output or f"ct_report_single_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+            if save_consolidated_json([report_dict], output_file):
+                print(f"✅ Relatório salvo em: {output_file}")
             else:
                 print("❌ Erro ao salvar o relatório")
         else:
             print("❌ Não foi possível extrair dados do arquivo DICOM")
     else:
-        # Processa pasta inteira
-        reports = process_dicom_folder(args.folder, args.output_folder, args.debug)
+        # Processamento recursivo
+        if not os.path.exists(args.folder):
+            print(f"❌ Pasta não encontrada: {args.folder}")
+            return
 
-        if reports:
-            # Salva relatório consolidado
-            consolidated_file = f"all_ct_reports_dicom_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            if save_to_json(reports, consolidated_file, args.output_folder):
-                print(f"\n✅ Relatório consolidado salvo em: {os.path.join(args.output_folder, consolidated_file)}")
+        reports = process_all_dicoms_recursive(args.folder, args.output, args.debug)
 
-            print(f"\n📊 RESUMO:")
-            print(f"   Total de relatórios processados: {len(reports)}")
-            print(f"   Arquivos salvos na pasta: {args.output_folder}")
-
-            # Mostra estatísticas básicas
-            total_dlp_values = []
-            hospitals = set()
-
-            for report in reports:
-                if report.get('irradiation', {}).get('total_dlp'):
-                    dlp_str = report['irradiation']['total_dlp']
-                    try:
-                        # Extrai apenas o número da string "valor unidade"
-                        dlp_value = float(dlp_str.split()[0])
-                        total_dlp_values.append(dlp_value)
-                    except:
-                        pass
-
-                hospital = report.get('hospital', '')
-                if hospital:
-                    hospitals.add(hospital)
-
-            if total_dlp_values:
-                print(
-                    f"   DLP Total - Min: {min(total_dlp_values):.2f}, Max: {max(total_dlp_values):.2f}, Média: {sum(total_dlp_values) / len(total_dlp_values):.2f}")
-
-            if hospitals:
-                print(f"   Hospitais: {', '.join(list(hospitals)[:3])}{'...' if len(hospitals) > 3 else ''}")
-        else:
+        if not reports:
             print("\n⚠️ Nenhum relatório foi processado com sucesso.")
+        else:
+            print(f"\n🎯 Processamento concluído com sucesso!")
+            print(f"📊 Total de relatórios processados: {len(reports)}")
 
-    print("\n🎯 Processamento concluído!")
+    print("\n" + "=" * 80)
 
 
 if __name__ == "__main__":
