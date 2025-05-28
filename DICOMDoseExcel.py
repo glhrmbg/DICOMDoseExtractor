@@ -3,6 +3,7 @@ DICOMDoseExcel.py - Conversor de dados de relatórios DICOM de CT para Excel
 
 Este script lê os arquivos JSON gerados pelo DICOMDoseExtractor e cria
 uma planilha Excel com as informações organizadas em colunas.
+Versão adaptada para JSON consolidado do extrator recursivo.
 """
 
 import json
@@ -151,76 +152,29 @@ def extract_scan_info(acquisition):
     return scan_info
 
 
-def json_to_excel(json_folder="dicom_reports_json", output_file="ct_dose_dicom_report.xlsx"):
+def json_to_excel(json_file, output_file="ct_dose_dicom_report.xlsx"):
     """Converte os dados JSON de DICOM para Excel"""
-    # Procura primeiro pelo arquivo DICOM coletivo
-    json_dicom_all_path = os.path.join(json_folder, "ct_reports_dicom_all.json")
 
-    target_file = None
-
-    if os.path.exists(json_dicom_all_path):
-        target_file = json_dicom_all_path
-        print(f"✓ Encontrado arquivo DICOM coletivo: '{os.path.basename(json_dicom_all_path)}'")
-    else:
-        # Procura por arquivos JSON individuais de DICOM
-        dicom_json_pattern = os.path.join(json_folder, "ct_report_dicom_*.json")
-        dicom_json_files = glob.glob(dicom_json_pattern)
-
-        if dicom_json_files:
-            # Se encontrar arquivos DICOM individuais, usa o primeiro como exemplo
-            target_file = dicom_json_files[0]
-            print(f"ℹ️ Arquivo coletivo DICOM não encontrado, usando arquivos individuais")
-            print(f"   Processando {len(dicom_json_files)} arquivos DICOM individuais...")
-
-            # Combina todos os arquivos DICOM individuais
-            all_reports = []
-            for dicom_file in dicom_json_files:
-                try:
-                    with open(dicom_file, 'r', encoding='utf-8') as f:
-                        reports = json.load(f)
-                        if isinstance(reports, list):
-                            all_reports.extend(reports)
-                        else:
-                            all_reports.append(reports)
-                except Exception as e:
-                    print(f"⚠️ Erro ao ler {os.path.basename(dicom_file)}: {str(e)}")
-
-            # Salva arquivo temporário combinado
-            temp_combined_file = os.path.join(json_folder, "temp_combined_dicom.json")
-            try:
-                with open(temp_combined_file, 'w', encoding='utf-8') as f:
-                    json.dump(all_reports, f, indent=2, ensure_ascii=False)
-                target_file = temp_combined_file
-                print(f"✓ Combinados {len(all_reports)} relatórios DICOM")
-            except Exception as e:
-                print(f"❌ Erro ao combinar arquivos: {str(e)}")
-                return False
-        else:
-            # Fallback: procura qualquer arquivo JSON (mesmo de PDF)
-            json_files = glob.glob(os.path.join(json_folder, "*.json"))
-            if not json_files:
-                print(f"❌ Erro: Nenhum arquivo JSON encontrado em '{json_folder}'")
-                return False
-
-            target_file = json_files[0]
-            print(f"ℹ️ Nenhum arquivo DICOM específico encontrado, usando '{os.path.basename(target_file)}'")
-
-    # Lê o arquivo JSON
+    # Lê o arquivo JSON (pode ser consolidado ou legado)
     try:
-        with open(target_file, 'r', encoding='utf-8') as f:
-            reports = json.load(f)
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
 
-        if not isinstance(reports, list):
-            reports = [reports]  # Converte para lista se for apenas um objeto
+        # Verifica se é o formato consolidado novo (com metadata e reports)
+        if isinstance(data, dict) and 'metadata' in data and 'reports' in data:
+            reports = data['reports']
+            print(f"✓ JSON consolidado detectado com {len(reports)} relatórios")
+            print(f"  Gerado em: {data['metadata'].get('generated_at', 'N/A')}")
+        elif isinstance(data, list):
+            # Formato legado (lista direta de relatórios)
+            reports = data
+            print(f"✓ JSON legado detectado com {len(reports)} relatórios")
+        else:
+            # Objeto único
+            reports = [data]
+            print(f"✓ Relatório único detectado")
 
-        print(f"✓ Leitura de {len(reports)} relatórios do arquivo '{os.path.basename(target_file)}'")
-
-        # Remove arquivo temporário se foi criado
-        if 'temp_combined_dicom.json' in target_file:
-            try:
-                os.remove(target_file)
-            except:
-                pass
+        print(f"✓ Processando {len(reports)} relatórios do arquivo '{os.path.basename(json_file)}'")
 
     except Exception as e:
         print(f"❌ Erro ao ler JSON: {str(e)}")
@@ -302,14 +256,16 @@ def json_to_excel(json_folder="dicom_reports_json", output_file="ct_dose_dicom_r
                 scan_info = extract_scan_info(acquisition)
 
                 # Insere valores na planilha com tratamento explícito para None/null
-                ws.cell(row=row_idx, column=1, value=patient_id if patient_id is not None else '-')
+                patient_id_value = int(patient_id) if patient_id and patient_id.isdigit() else (patient_id if patient_id else '-')
+                ws.cell(row=row_idx, column=1, value=patient_id_value)
                 ws.cell(row=row_idx, column=2, value=patient_name if patient_name is not None else '-')
                 ws.cell(row=row_idx, column=3, value=sex if sex is not None else '-')
                 ws.cell(row=row_idx, column=4, value=birth_date if birth_date is not None else '-')
 
                 # Calcula a idade com base na data de nascimento e data do exame
                 age = calculate_age(birth_date, study_date)
-                ws.cell(row=row_idx, column=5, value=age)
+                age_value = int(age) if age != '-' and age.isdigit() else age
+                ws.cell(row=row_idx, column=5, value=age_value)
 
                 ws.cell(row=row_idx, column=6, value=scan_info['protocol'])
                 ws.cell(row=row_idx, column=7, value=study_date if study_date is not None else '-')
@@ -336,14 +292,16 @@ def json_to_excel(json_folder="dicom_reports_json", output_file="ct_dose_dicom_r
                 row_idx += 1
         else:
             # Se não houver aquisições, adiciona pelo menos uma linha com dados básicos
-            ws.cell(row=row_idx, column=1, value=patient_id if patient_id is not None else '-')
+            patient_id_value = int(patient_id) if patient_id and patient_id.isdigit() else (patient_id if patient_id else '-')
+            ws.cell(row=row_idx, column=1, value=patient_id_value)
             ws.cell(row=row_idx, column=2, value=patient_name if patient_name is not None else '-')
             ws.cell(row=row_idx, column=3, value=sex if sex is not None else '-')
             ws.cell(row=row_idx, column=4, value=birth_date if birth_date is not None else '-')
 
             # Calcula a idade para esta linha também
             age = calculate_age(birth_date, study_date)
-            ws.cell(row=row_idx, column=5, value=age)
+            age_value = int(age) if age != '-' and age.isdigit() else age
+            ws.cell(row=row_idx, column=5, value=age_value)
 
             ws.cell(row=row_idx, column=6, value='-')
             ws.cell(row=row_idx, column=7, value=study_date if study_date is not None else '-')
@@ -376,9 +334,27 @@ def json_to_excel(json_folder="dicom_reports_json", output_file="ct_dose_dicom_r
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Conversor de relatórios JSON de DICOM CT para Excel')
-    parser.add_argument('--input-folder', type=str, default='dicom_reports_json',
-                        help='Pasta contendo os arquivos JSON de DICOM (padrão: dicom_reports_json)')
+    parser = argparse.ArgumentParser(
+        description='Conversor de relatórios JSON de DICOM CT para Excel',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemplos de uso:
+
+1. Arquivo JSON consolidado (novo formato):
+   python DICOMDoseExcel.py dicom_reports_consolidated_20241228_143022.json
+
+2. Especificar arquivo de saída:
+   python DICOMDoseExcel.py dados.json --output relatorio_dose_2024.xlsx
+
+3. Arquivo JSON legado (formato antigo):
+   python DICOMDoseExcel.py ct_reports_dicom_all.json
+
+O script detecta automaticamente se o JSON é consolidado (novo) ou legado.
+        """
+    )
+
+    parser.add_argument('json_file',
+                        help='Arquivo JSON com dados DICOM (consolidado ou legado)')
     parser.add_argument('--output', type=str, default='ct_dose_dicom_report.xlsx',
                         help='Nome do arquivo Excel de saída (padrão: ct_dose_dicom_report.xlsx)')
 
@@ -387,8 +363,12 @@ if __name__ == "__main__":
     print(f"\n{'=' * 80}")
     print(f"DICOMDoseExcel - Conversor de Relatórios JSON DICOM para Excel")
     print(f"{'=' * 80}")
-    print(f"Pasta de entrada (JSONs): {args.input_folder}")
-    print(f"Arquivo de saída (Excel): {args.output}")
+    print(f"Arquivo JSON: {args.json_file}")
+    print(f"Arquivo Excel: {args.output}")
     print(f"{'=' * 80}\n")
 
-    json_to_excel(args.input_folder, args.output)
+    # Verifica se arquivo existe
+    if not os.path.exists(args.json_file):
+        print(f"❌ Arquivo JSON não encontrado: {args.json_file}")
+    else:
+        json_to_excel(args.json_file, args.output)
