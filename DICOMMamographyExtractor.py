@@ -4,6 +4,7 @@ DICOMMamographyExtractor.py - Extração direta de DICOM SR de Mamografia para E
 Este script navega recursivamente por estruturas de pastas, encontra arquivos DICOM SR
 de dose de radiação de mamografia e gera diretamente a planilha Excel sem JSON intermediário.
 Extrai apenas os campos necessários para otimizar performance.
+MODIFICADO: Salva valores numéricos como números puros (sem unidades) no Excel.
 """
 
 import pydicom
@@ -281,6 +282,31 @@ class DICOMMamographyExtractor:
             pass
         return ""
 
+    def get_numeric_value_as_float(self, content_item):
+        """Extrai valor numérico como float para Excel, retorna None se não for número"""
+        try:
+            if hasattr(content_item, 'MeasuredValueSequence') and content_item.MeasuredValueSequence:
+                measured_value = content_item.MeasuredValueSequence[0]
+                numeric_value = getattr(measured_value, 'NumericValue', '')
+                if numeric_value:
+                    return float(numeric_value)
+        except:
+            pass
+        return None
+
+    def safe_numeric_value(self, content_item, return_as_number=False):
+        """
+        Extrai valor numérico de forma segura
+        Args:
+            content_item: Item do DICOM
+            return_as_number: Se True, retorna float/int para Excel, senão string com unidade
+        """
+        if return_as_number:
+            value = self.get_numeric_value_as_float(content_item)
+            return value if value is not None else '-'
+        else:
+            return self.get_numeric_value_with_unit(content_item) or '-'
+
     def extract_laterality(self, content_sequence) -> str:
         """Extrai lateralidade (Left/Right)"""
         for item in content_sequence:
@@ -323,7 +349,7 @@ class DICOMMamographyExtractor:
                 'avg': round(sum(values)/len(values), 3),
                 'count': len(values)
             }
-        return {'min': '-', 'max': '-', 'avg': '-', 'count': 0}
+        return {'min': None, 'max': None, 'avg': None, 'count': 0}
 
     def extract_all_filters(self, content_sequence) -> list:
         """Extrai todos os filtros do evento"""
@@ -398,7 +424,7 @@ class DICOMMamographyExtractor:
                 dose_source = self.get_code_meaning(source_item)
 
             # Dicionário para armazenar AGD acumulada por lateralidade
-            accumulated_agd = {'Left': '', 'Right': ''}
+            accumulated_agd = {'Left': None, 'Right': None}
 
             # Primeiro, extrai dose acumulada por lateralidade
             for item in main_content:
@@ -416,8 +442,8 @@ class DICOMMamographyExtractor:
                                             getattr(sub_item.ConceptNameCodeSequence[0], 'CodeValue', '') ==
                                             self.concept_codes['accumulated_agd']):
 
-                                        agd_value = self.get_numeric_value_only(sub_item)
-                                        if agd_value and hasattr(sub_item, 'ContentSequence'):
+                                        agd_value = self.get_numeric_value_as_float(sub_item)
+                                        if agd_value is not None and hasattr(sub_item, 'ContentSequence'):
                                             laterality = self.extract_laterality(sub_item.ContentSequence)
                                             if laterality:
                                                 accumulated_agd[laterality] = agd_value
@@ -450,36 +476,36 @@ class DICOMMamographyExtractor:
                             image_view = ''
                             target_region = ''
 
-                            # Parâmetros técnicos básicos
-                            kvp = ''
-                            tube_current = ''
-                            exposure_time = ''
-                            pulse_width = ''
-                            number_of_pulses = ''
-                            irradiation_duration = ''
-                            focal_spot_size = ''
+                            # Parâmetros técnicos básicos (como números para Excel)
+                            kvp = None
+                            tube_current = None
+                            exposure_time = None
+                            pulse_width = None
+                            number_of_pulses = None
+                            irradiation_duration = None
+                            focal_spot_size = None
 
                             # Análise detalhada dos parâmetros múltiplos
                             kvp_stats = self.aggregate_multiple_values(event_content, self.concept_codes['kvp'])
                             current_stats = self.aggregate_multiple_values(event_content, self.concept_codes['tube_current'])
                             pulse_stats = self.aggregate_multiple_values(event_content, self.concept_codes['pulse_width'])
 
-                            # Dose e exposição
-                            agd = ''
-                            entrance_exposure = ''
-                            half_value_layer = ''
+                            # Dose e exposição (como números para Excel)
+                            agd = None
+                            entrance_exposure = None
+                            half_value_layer = None
 
-                            # Geometria
-                            compression_thickness = ''
-                            distance_source_rp = ''
-                            field_area = ''
-                            field_height = ''
-                            field_width = ''
+                            # Geometria (como números para Excel)
+                            compression_thickness = None
+                            distance_source_rp = None
+                            field_area = None
+                            field_height = None
+                            field_width = None
 
                             # Equipamento
                             anode_material = ''
                             grid_type = ''
-                            positioner_angle = ''
+                            positioner_angle = None
 
                             # Filtros (múltiplos)
                             all_filters = self.extract_all_filters(event_content)
@@ -512,52 +538,55 @@ class DICOMMamographyExtractor:
                                         image_view = self.get_code_meaning(event_item)
                                     elif code == self.concept_codes['target_region']:
                                         target_region = self.get_code_meaning(event_item)
-                                    elif code == self.concept_codes['kvp'] and not kvp:
-                                        kvp = self.get_numeric_value_with_unit(event_item)
-                                    elif code == self.concept_codes['tube_current'] and not tube_current:
-                                        tube_current = self.get_numeric_value_with_unit(event_item)
+                                    elif code == self.concept_codes['kvp'] and kvp is None:
+                                        kvp = self.get_numeric_value_as_float(event_item)
+                                    elif code == self.concept_codes['tube_current'] and tube_current is None:
+                                        tube_current = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['exposure_time']:
-                                        exposure_time = self.get_numeric_value_with_unit(event_item)
-                                    elif code == self.concept_codes['pulse_width'] and not pulse_width:
-                                        pulse_width = self.get_numeric_value_with_unit(event_item)
+                                        exposure_time = self.get_numeric_value_as_float(event_item)
+                                    elif code == self.concept_codes['pulse_width'] and pulse_width is None:
+                                        pulse_width = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['number_of_pulses']:
-                                        number_of_pulses = self.get_numeric_value_only(event_item)
+                                        number_of_pulses = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['irradiation_duration']:
-                                        irradiation_duration = self.get_numeric_value_with_unit(event_item)
+                                        irradiation_duration = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['focal_spot_size']:
-                                        focal_spot_size = self.get_numeric_value_with_unit(event_item)
+                                        focal_spot_size = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['average_glandular_dose']:
-                                        agd = self.get_numeric_value_with_unit(event_item)
+                                        agd = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['entrance_exposure']:
-                                        entrance_exposure = self.get_numeric_value_with_unit(event_item)
+                                        entrance_exposure = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['half_value_layer']:
-                                        half_value_layer = self.get_numeric_value_with_unit(event_item)
+                                        half_value_layer = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['compression_thickness']:
-                                        compression_thickness = self.get_numeric_value_with_unit(event_item)
+                                        compression_thickness = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['distance_source_to_rp']:
-                                        distance_source_rp = self.get_numeric_value_with_unit(event_item)
+                                        distance_source_rp = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['collimated_field_area']:
-                                        field_area = self.get_numeric_value_with_unit(event_item)
+                                        field_area = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['collimated_field_height']:
-                                        field_height = self.get_numeric_value_with_unit(event_item)
+                                        field_height = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['collimated_field_width']:
-                                        field_width = self.get_numeric_value_with_unit(event_item)
+                                        field_width = self.get_numeric_value_as_float(event_item)
                                     elif code == self.concept_codes['anode_target_material']:
                                         anode_material = self.get_code_meaning(event_item)
                                     elif code == self.concept_codes['xray_grid']:
                                         grid_type = self.get_code_meaning(event_item)
                                     elif code == self.concept_codes['positioner_angle']:
-                                        positioner_angle = self.get_numeric_value_with_unit(event_item)
+                                        positioner_angle = self.get_numeric_value_as_float(event_item)
 
                                 except:
                                     continue
 
-                            # Tratamento de valores vazios
-                            def safe_value(val):
+                            # Função para converter None para '-' para campos de texto, manter None para números
+                            def safe_text_value(val):
                                 return val if val else '-'
 
+                            def safe_numeric_value(val):
+                                return val  # None será tratado como célula vazia no Excel
+
                             # AGD acumulada baseada na lateralidade
-                            accumulated_agd_value = accumulated_agd.get(laterality, '-') if laterality else '-'
+                            accumulated_agd_value = accumulated_agd.get(laterality) if laterality else None
 
                             # Cria linha para Excel
                             excel_row = [
@@ -574,38 +603,38 @@ class DICOMMamographyExtractor:
                                 laterality or '-',  # Lateralidade
                                 image_view or '-',  # Projeção (CC, MLO, etc)
                                 event_type or '-',  # Tipo de evento
-                                safe_value(kvp),  # kVp (primeiro valor)
+                                safe_numeric_value(kvp),  # kVp (primeiro valor)
                                 kvp_stats['min'],  # kVp mínimo
                                 kvp_stats['max'],  # kVp máximo
                                 kvp_stats['avg'],  # kVp médio
-                                safe_value(tube_current),  # Corrente do tubo (primeiro valor)
+                                safe_numeric_value(tube_current),  # Corrente do tubo (primeiro valor)
                                 current_stats['min'],  # mA mínimo
                                 current_stats['max'],  # mA máximo
                                 current_stats['avg'],  # mA médio
-                                safe_value(exposure_time),  # Tempo de exposição
-                                safe_value(number_of_pulses),  # Número de pulsos
+                                safe_numeric_value(exposure_time),  # Tempo de exposição
+                                safe_numeric_value(number_of_pulses),  # Número de pulsos
                                 pulse_stats['count'],  # Total de pulsos registrados
-                                safe_value(pulse_width),  # Largura do pulso (primeiro valor)
+                                safe_numeric_value(pulse_width),  # Largura do pulso (primeiro valor)
                                 pulse_stats['min'],  # Pulse width mínimo
                                 pulse_stats['max'],  # Pulse width máximo
                                 pulse_stats['avg'],  # Pulse width médio
-                                safe_value(irradiation_duration),  # Duração da irradiação
-                                safe_value(focal_spot_size),  # Tamanho do ponto focal
-                                safe_value(agd),  # Dose glandular média (evento)
+                                safe_numeric_value(irradiation_duration),  # Duração da irradiação
+                                safe_numeric_value(focal_spot_size),  # Tamanho do ponto focal
+                                safe_numeric_value(agd),  # Dose glandular média (evento)
                                 accumulated_agd_value,  # Dose glandular acumulada
-                                safe_value(entrance_exposure),  # Exposição na entrada
-                                safe_value(half_value_layer),  # Camada de semi-atenuação
-                                safe_value(compression_thickness),  # Espessura de compressão
-                                safe_value(distance_source_rp),  # Distância fonte-ponto ref
-                                safe_value(field_area),  # Área do campo colimado
-                                safe_value(field_height),  # Altura do campo
-                                safe_value(field_width),  # Largura do campo
-                                safe_value(anode_material),  # Material do anodo
+                                safe_numeric_value(entrance_exposure),  # Exposição na entrada
+                                safe_numeric_value(half_value_layer),  # Camada de semi-atenuação
+                                safe_numeric_value(compression_thickness),  # Espessura de compressão
+                                safe_numeric_value(distance_source_rp),  # Distância fonte-ponto ref
+                                safe_numeric_value(field_area),  # Área do campo colimado
+                                safe_numeric_value(field_height),  # Altura do campo
+                                safe_numeric_value(field_width),  # Largura do campo
+                                safe_text_value(anode_material),  # Material do anodo
                                 filter_primary or '-',  # Filtro principal
                                 filter_secondary or '-',  # Filtro secundário
                                 filter_tertiary or '-',  # Filtro terciário
-                                safe_value(grid_type),  # Tipo de grade
-                                safe_value(positioner_angle),  # Ângulo do posicionador
+                                safe_text_value(grid_type),  # Tipo de grade
+                                safe_numeric_value(positioner_angle),  # Ângulo do posicionador
                                 dose_source or '-',  # Fonte da informação de dose
                                 event_uid or '-'  # UID do evento
                             ]
@@ -620,9 +649,9 @@ class DICOMMamographyExtractor:
                 excel_row = [
                     patient_id_value, patient_name or '-', sex or '-', birth_date or '-', age_value,
                     study_date or '-', manufacturer or '-', model or '-', station_name or '-',
-                    '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-',
-                    '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-',
-                    '-', '-', '-', '-', '-', '-', dose_source or '-', '-'
+                    '-', '-', '-', '-', None, None, None, None, None, None, None, None, None, None, None,
+                    None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                    '-', '-', '-', '-', '-', None, dose_source or '-', '-'
                 ]
                 excel_rows.append(excel_row)
 
@@ -707,6 +736,38 @@ class DICOMMamographyExtractor:
                     col_letter = f"A{chr(64 + i - 26)}"
                 ws.column_dimensions[col_letter].width = width
 
+        # Lista de colunas que contêm valores numéricos (índices começando em 1)
+        numeric_columns = {
+            5,   # Idade
+            14,  # kVp
+            15,  # kVp mínimo
+            16,  # kVp máximo
+            17,  # kVp médio
+            18,  # Corrente do tubo (mA)
+            19,  # mA mínimo
+            20,  # mA máximo
+            21,  # mA médio
+            22,  # Tempo de exposição
+            23,  # Número de pulsos
+            24,  # Total pulsos registrados
+            25,  # Largura do pulso
+            26,  # Pulse width mínimo
+            27,  # Pulse width máximo
+            28,  # Pulse width médio
+            29,  # Duração da irradiação
+            30,  # Tamanho do ponto focal
+            31,  # Dose glandular média (evento)
+            32,  # Dose glandular acumulada
+            33,  # Exposição na entrada
+            34,  # Camada de semi-atenuação
+            35,  # Espessura de compressão
+            36,  # Distância fonte-ponto ref
+            37,  # Área do campo colimado
+            38,  # Altura do campo
+            39,  # Largura do campo
+            43,  # Ângulo do posicionador
+        }
+
         # Processa arquivos DICOM
         row_idx = 2
         processed_count = 0
@@ -726,8 +787,13 @@ class DICOMMamographyExtractor:
                             cell.border = border
 
                             # Formatação especial para valores numéricos
-                            if isinstance(value, (int, float)) and value != '-':
-                                cell.number_format = '0.000'
+                            if col_idx in numeric_columns and value is not None and value != '-':
+                                if isinstance(value, (int, float)):
+                                    # Para números inteiros (como idade, pulsos), não usar decimais
+                                    if col_idx in [5, 23, 24]:  # Idade, Número de pulsos, Total pulsos
+                                        cell.number_format = '0'
+                                    else:
+                                        cell.number_format = '0.000'
 
                         row_idx += 1
                     processed_count += 1
@@ -755,6 +821,10 @@ class DICOMMamographyExtractor:
             print(f"Arquivos processados: {processed_count}/{len(dicom_files)}")
             print(f"Erros: {error_count}")
             print(f"Total de eventos: {row_idx - 2}")
+            print(f"📊 VALORES NUMÉRICOS: Salvos como números (sem unidades) para análise")
+            print(f"   • Doses, exposições, ângulos, tempos, etc.")
+            print(f"   • Formatação automática com 3 casas decimais")
+            print(f"   • Células vazias para valores não encontrados")
             print(f"{'=' * 80}")
 
             return True
@@ -767,7 +837,7 @@ class DICOMMamographyExtractor:
 def main():
     """Função principal"""
     parser = argparse.ArgumentParser(
-        description='DICOMMamographyExtractor - Extração direta de DICOM SR de Mamografia para Excel',
+        description='DICOMMamographyExtractor - Extração direta de DICOM SR de Mamografia para Excel (VALORES NUMÉRICOS)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemplos de uso:
@@ -784,14 +854,20 @@ Exemplos de uso:
 4. Especificar arquivo Excel:
    python DICOMMamographyExtractor.py --output relatorio_mamografia_2024.xlsx
 
+MODIFICAÇÕES NESTA VERSÃO:
+✅ Valores numéricos são salvos como números puros (sem unidades)
+✅ Doses, exposições, ângulos e medidas ficam como números no Excel
+✅ Formatação automática com 3 casas decimais para análise
+✅ Células vazias quando valores não são encontrados (ao invés de '-')
+
 O script navega recursivamente pelas pastas, encontra DICOMs SR de dose 
-de mamografia e gera diretamente a planilha Excel sem JSON intermediário.
+de mamografia e gera diretamente a planilha Excel otimizada para análise numérica.
 
 Dados extraídos incluem:
 - Informações do paciente e exame
-- Parâmetros técnicos (kVp, mA, tempo de exposição, etc.)
-- Dose glandular média por evento e acumulada
-- Geometria (espessura de compressão, campo colimado)
+- Parâmetros técnicos (kVp, mA, tempo de exposição, etc.) - COMO NÚMEROS
+- Dose glandular média por evento e acumulada - COMO NÚMEROS  
+- Geometria (espessura de compressão, campo colimado) - COMO NÚMEROS
 - Equipamento (fabricante, modelo, materiais)
 - Lateralidade e projeções (CC, MLO, etc.)
         """
@@ -799,19 +875,20 @@ Dados extraídos incluem:
 
     parser.add_argument('--folder', '-f', default='.',
                         help='Pasta raiz para busca recursiva (padrão: pasta atual)')
-    parser.add_argument('--output', '-o', default='mammography_dose_report.xlsx',
-                        help='Nome do arquivo Excel (padrão: mammography_dose_report.xlsx)')
+    parser.add_argument('--output', '-o', default='mammography_dose_report_numeric.xlsx',
+                        help='Nome do arquivo Excel (padrão: mammography_dose_report_numeric.xlsx)')
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Ativa modo debug com informações detalhadas')
 
     args = parser.parse_args()
 
     print("=" * 80)
-    print("🏥 DICOM MAMMOGRAPHY EXTRACTOR - Extração Direta de Mamografia")
+    print("🏥 DICOM MAMMOGRAPHY EXTRACTOR - Extração Direta (VALORES NUMÉRICOS)")
     print("=" * 80)
     print(f"📂 Pasta raiz: {os.path.abspath(args.folder)}")
     print(f"📄 Arquivo Excel: {args.output}")
     print(f"🔍 Debug: {'Ativado' if args.debug else 'Desativado'}")
+    print(f"📊 Valores numéricos salvos como números (sem unidades)")
     print("=" * 80)
 
     if not os.path.exists(args.folder):
@@ -825,11 +902,12 @@ Dados extraídos incluem:
     if success:
         print(f"\n🎯 Processamento de mamografia concluído com sucesso!")
         print(f"📊 Dados específicos extraídos:")
-        print(f"   • Dose glandular média por evento e acumulada")
+        print(f"   • Dose glandular média por evento e acumulada (NÚMEROS)")
         print(f"   • Lateralidade (Left/Right breast)")
         print(f"   • Projeções (cranio-caudal, MLO)")
-        print(f"   • Parâmetros técnicos específicos de mamografia")
-        print(f"   • Geometria de compressão e colimação")
+        print(f"   • Parâmetros técnicos específicos de mamografia (NÚMEROS)")
+        print(f"   • Geometria de compressão e colimação (NÚMEROS)")
+        print(f"   • Formatação numérica otimizada para análise")
     else:
         print(f"\n❌ Falha no processamento de mamografia")
 
